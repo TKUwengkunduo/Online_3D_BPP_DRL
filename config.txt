@@ -1,0 +1,18 @@
+[ItemSizes]
+item1 = 25, 38, 15
+item2 = 19, 28, 14
+item3 = 19, 22, 11
+
+[ItemProbabilities]
+item1 = 0.2
+item2 = 0.4
+item3 = 0.4
+
+[Container]
+length = 38
+width = 58
+height = 30
+precision = 1
+
+[Visualization]
+enabled = True

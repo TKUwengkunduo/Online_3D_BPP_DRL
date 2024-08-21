@@ -40,8 +40,11 @@ class BinPackingEnv(gym.Env):
         # 計算狀態和動作空間的大小
         self.action_space = spaces.Discrete(self.container_length * self.container_width * 2)  # 每個位置有兩個方向
         self.observation_space = spaces.Box(
-            low=0, high=self.container_height, 
-            shape=(self.container_length * self.container_width,), dtype=np.float32)
+            low=0, 
+            high=max(self.container_height, max(max(self.items))),  # max用於處理item的最大尺寸
+            shape=(self.container_length * self.container_width + 3,),  # +3 表示item的長、寬、高
+            dtype=np.float32
+        )
         
         # 初始化可視化
         if self.visualization_enabled:
@@ -57,11 +60,17 @@ class BinPackingEnv(gym.Env):
         self.container = np.zeros((self.container_length, self.container_width), dtype=np.float32)
         self.current_item_index = 0
         self.done = False
+        
+        # 選擇第一個item
+        self.current_item = self.items[np.random.choice(len(self.items), p=self.item_probabilities)]
+
         if self.visualization_enabled:
             self.reset_visualization()
         
-        # 返回觀察值和空的字典
-        return self.container.flatten(), {}
+        # 返回包含item信息的觀測值，轉換為float32
+        observation = np.concatenate([self.container.flatten(), np.array(self.current_item)]).astype(np.float32)
+        return observation, {}
+
 
     def init_visualization(self):
         self.fig = plt.figure()
@@ -96,24 +105,22 @@ class BinPackingEnv(gym.Env):
 
     def step(self, action):
         if self.done:
-            return self.container.flatten(), 0, True, False, {}
-        
+            return self.container.flatten().astype(np.float32), 0, True, False, {}
+
+        # 使用當前item進行操作
         position_index = action // 2
         rotation = action % 2
 
-        # 使用機率選擇 item
-        item_index = np.random.choice(len(self.items), p=self.item_probabilities)
-        item_size = self.items[item_index]
-        
         # 旋轉物品
+        item_size = self.current_item
         if rotation == 1:
             item_size = (item_size[1], item_size[0], item_size[2])
-        
+
         # 計算放置位置
         x = position_index // self.container_width
         y = position_index % self.container_width
         z = np.max(self.container[x:x+int(item_size[0]), y:y+int(item_size[1])])
-        
+
         # 檢查是否可以放置
         if (x + item_size[0] <= self.container_length and 
             y + item_size[1] <= self.container_width and 
@@ -122,61 +129,91 @@ class BinPackingEnv(gym.Env):
             self.container[x:x+int(item_size[0]), y:y+int(item_size[1])] = z + item_size[2]
             reward = 0.3  # 成功放置獎勵
 
-            # 計算全面密集度
-            contact = 0
+
+            # 計算接觸面的數量
+            contact_faces = 0
 
             # 檢查左邊接觸
             if x == 0 or np.any(self.container[x-1, y:y+int(item_size[1])] >= z):
-                contact += 1
+                contact_faces += 1
             # 檢查右邊接觸
             if x + item_size[0] == self.container_length or np.any(self.container[x+int(item_size[0]):x+int(item_size[0])+1, y:y+int(item_size[1])] >= z):
-                contact += 1
+                contact_faces += 1
             # 檢查前邊接觸
             if y == 0 or np.any(self.container[x:x+int(item_size[0]), y-1] >= z):
-                contact += 1
+                contact_faces += 1
             # 檢查後邊接觸
             if y + item_size[1] == self.container_width or np.any(self.container[x:x+int(item_size[0]), y+int(item_size[1]):y+int(item_size[1])+1] >= z):
-                contact += 1
+                contact_faces += 1
+            
+            # 根據接觸面數量計算獎勵
+            if contact_faces == 1:
+                reward -= 0.1
+            elif contact_faces == 2:
+                reward += 0.3
+            elif contact_faces == 3:
+                reward += 0.5
+            elif contact_faces == 4:
+                reward += 0.8
 
-            if contact >= 2:
-                reward += contact/2
-            else:
-                reward += 0.2
+            
 
-            # 檢查底部接觸
-            bottom_contact_area = 0
-            total_bottom_area = item_size[0] * item_size[1]
-            for i in range(int(item_size[0])):
-                for j in range(int(item_size[1])):
-                    if self.container[x+i, y+j] == z:
-                        bottom_contact_area += 1
+            # 計算底面積接觸
+            # bottom_contact_area = 0
+            # total_bottom_area = item_size[0] * item_size[1]
+            # for i in range(int(item_size[0])):
+            #     for j in range(int(item_size[1])):
+            #         if self.container[x+i, y+j] == z:
+            #             bottom_contact_area += 1
 
-            # 計算接觸比例
-            contact_ratio = bottom_contact_area / total_bottom_area
+            # # 計算接觸比例
+            # contact_ratio = bottom_contact_area / total_bottom_area
 
-            # 根據接觸面積比例計算獎勵
-            if contact_ratio < 0.25:
-                reward = -1  # 25%以下放置失敗，懲罰
-            elif contact_ratio < 0.5:
-                reward -= 0.5  # 50%以下扣分
-            elif contact_ratio < 0.75:
-                reward += 0.5  # 75%以下小幅獎勵
-            else:
-                reward += 1  # 100%接觸，獎勵較高
+            # # 根據接觸面積比例計算獎勵
+            # if z == 0:  # 接觸容器底部
+            #     reward += 0.5
+            # else:  # 接觸其他物品
+            #     if contact_ratio < 0.5:
+            #         reward -= 0.5
+            #     elif contact_ratio < 0.75:
+            #         reward += 0.3
+            #     else:
+            #         reward += 0.5
 
 
 
-            self.update_visualization((x, y, z), item_size, item_index)
+            # 更新觀測值
+            self.current_item = self.items[np.random.choice(len(self.items), p=self.item_probabilities)]
+            observation = np.concatenate([self.container.flatten(), np.array(self.current_item)]).astype(np.float32)
+
+            # 找到與 item_size 匹配的 item_index
+            item_index = None
+            for i, item in enumerate(self.items):
+                if (item[0] == item_size[0] and item[1] == item_size[1] and item[2] == item_size[2]) or \
+                (item[1] == item_size[0] and item[0] == item_size[1] and item[2] == item_size[2]):
+                    item_index = i
+                    break
+
+            if item_index is not None:
+                self.update_visualization((x, y, z), item_size, item_index)
+            
+             # 檢查是否無法繼續放置
+            if self.is_draw():
+                self.done = True
+                terminated = True
+                return observation, reward, terminated, False, {}
+        
         else:
             reward = -1  # 放置失敗懲罰 -1
             self.done = True
-        
+            # 即使放置失敗，也需要生成一個觀測值
+            observation = np.concatenate([self.container.flatten(), np.array(self.current_item)]).astype(np.float32)
+
         terminated = self.done
         truncated = False  # 可以根據需求來決定是否提早終止
 
-        # 回傳狀態、獎勵、是否終止、是否提早終止以及附加信息
-        return self.container.flatten(), reward, terminated, truncated, {}
-
+        # 回傳包含item信息的觀測值，轉換為float32
+        return observation, reward, terminated, truncated, {}
 
 
 
